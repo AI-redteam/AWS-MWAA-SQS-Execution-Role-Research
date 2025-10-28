@@ -114,5 +114,5 @@ rule check_sqs_wildcard_for_target_role when
                 }
             }
         }
-    } # End of managed policy check
+    } 
 }
