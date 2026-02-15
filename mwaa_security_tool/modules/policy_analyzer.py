@@ -14,6 +14,7 @@ Capabilities:
 
 import json
 import re
+import textwrap
 from typing import Optional
 
 from ..config import AttackerConfig, TargetConfig, MWAA_SQS_ACTIONS
@@ -309,7 +310,6 @@ def generate_config_guard_rule() -> str:
 
 def generate_cloudwatch_detection_queries() -> dict:
     """Generate CloudWatch Insights queries for detecting exploitation."""
-    import textwrap
     return {
         "cross_account_sqs_send": textwrap.dedent("""\
             # Detect SQS SendMessage to external accounts
@@ -349,7 +349,3 @@ def generate_cloudwatch_detection_queries() -> dict:
             | sort total desc
         """),
     }
-
-
-# Inline import needed for generate_config_guard_rule
-import textwrap

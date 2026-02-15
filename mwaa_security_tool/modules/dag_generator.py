@@ -1086,6 +1086,9 @@ def generate_all(
     attacker: AttackerConfig,
     output_dir: str,
     target_accounts: Optional[list] = None,
+    poll_interval_minutes: int = 5,
+    jitter_seconds: int = 0,
+    stealth: bool = False,
 ) -> list:
     """Generate all DAG payloads and write them to the output directory."""
     print_section("Generating All DAG Payloads")
@@ -1100,7 +1103,13 @@ def generate_all(
 
     # C2 Implant DAG
     path = os.path.join(output_dir, "dag_c2_implant.py")
-    generate_c2_implant_dag(attacker, output_path=path)
+    generate_c2_implant_dag(
+        attacker,
+        poll_interval_minutes=poll_interval_minutes,
+        jitter_seconds=jitter_seconds,
+        stealth=stealth,
+        output_path=path,
+    )
     files.append(path)
 
     # Recon DAG

