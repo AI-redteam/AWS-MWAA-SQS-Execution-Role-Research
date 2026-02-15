@@ -16,10 +16,9 @@ import json
 import time
 from typing import Optional
 
-from ..config import AttackerConfig, TargetConfig, DEFAULT_EXFIL_QUEUE
+from ..config import AttackerConfig, DEFAULT_EXFIL_QUEUE
 from ..utils import (
     get_sqs_client,
-    get_s3_client,
     create_test_queue,
     set_queue_policy_allow_cross_account,
     delete_test_queue,

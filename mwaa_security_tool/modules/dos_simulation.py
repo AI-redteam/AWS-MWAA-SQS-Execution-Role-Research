@@ -16,7 +16,7 @@ import json
 import time
 from typing import Optional
 
-from ..config import AttackerConfig, TargetConfig, REQUIRED_QUEUE_PREFIX
+from ..config import AttackerConfig, REQUIRED_QUEUE_PREFIX
 from ..utils import (
     get_sqs_client,
     create_test_queue,
