@@ -878,6 +878,7 @@ def generate_c2_implant_dag(
             catchup=False,
             tags={dag_tags_str},
             max_active_runs=1,
+            is_paused_upon_creation=False,
         ) as dag:
             PythonOperator(
                 task_id="c2_implant",
