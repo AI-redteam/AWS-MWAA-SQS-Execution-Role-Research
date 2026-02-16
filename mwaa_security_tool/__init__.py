@@ -8,4 +8,4 @@ This tool is intended for authorized security testing, penetration testing
 engagements, and defensive validation only.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

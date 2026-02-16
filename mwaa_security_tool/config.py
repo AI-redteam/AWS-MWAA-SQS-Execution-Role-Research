@@ -23,7 +23,6 @@ MWAA_SQS_ACTIONS = [
 ]
 
 # Default queue names used in testing
-DEFAULT_EXFIL_QUEUE = "airflow-celery-exfil-data"
 DEFAULT_C2_CMD_QUEUE = "airflow-celery-c2-commands"
 DEFAULT_C2_RESULTS_QUEUE = "airflow-celery-c2-results"
 DEFAULT_RECON_QUEUE_NAMES = [
@@ -46,9 +45,9 @@ RECON_ENVIRONMENTS = [
 
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
-║         MWAA SQS Execution Role Security Tester             ║
+║         MWAA SQS Security Tool v2.0                         ║
 ║                                                              ║
-║  AWS MWAA Default IAM Policy Vulnerability Assessment Tool   ║
+║  AWS MWAA Default IAM Policy Exploitation Toolkit            ║
 ║  For authorized security testing and research only.          ║
 ╚══════════════════════════════════════════════════════════════╝
 """
