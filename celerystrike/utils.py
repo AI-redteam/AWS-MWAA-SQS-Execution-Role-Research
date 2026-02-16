@@ -1,5 +1,5 @@
 """
-Shared utilities for the MWAA security testing tool.
+Shared utilities for CeleryStrike.
 """
 
 import json
@@ -13,7 +13,7 @@ import botocore.exceptions
 
 from .config import REQUIRED_QUEUE_PREFIX
 
-logger = logging.getLogger("mwaa_security_tool")
+logger = logging.getLogger("celerystrike")
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -23,7 +23,7 @@ def setup_logging(verbose: bool = False) -> None:
     handler.setFormatter(
         logging.Formatter("[%(levelname)s] %(name)s: %(message)s")
     )
-    root = logging.getLogger("mwaa_security_tool")
+    root = logging.getLogger("celerystrike")
     root.setLevel(level)
     root.addHandler(handler)
 

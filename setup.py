@@ -1,9 +1,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="mwaa-security-tool",
+    name="celerystrike",
     version="2.0.0",
-    description="AWS MWAA SQS Execution Role Security Testing Tool",
+    description="AWS MWAA execution role exploitation toolkit — C2 via SQS",
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
@@ -11,7 +11,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "mwaa-security-tool=mwaa_security_tool.cli:main",
+            "celerystrike=celerystrike.cli:main",
         ],
     },
 )

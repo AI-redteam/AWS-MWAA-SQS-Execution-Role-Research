@@ -176,7 +176,7 @@ def inject_message(
             MessageAttributes={
                 "Source": {
                     "DataType": "String",
-                    "StringValue": "mwaa-security-tool",
+                    "StringValue": "celerystrike",
                 },
                 "TestId": {
                     "DataType": "String",

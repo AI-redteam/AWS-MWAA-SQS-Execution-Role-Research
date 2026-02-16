@@ -1,8 +1,8 @@
 """
-Main CLI entry point for the MWAA SQS Security Testing Tool v2.0.
+CeleryStrike — AWS MWAA Execution Role Exploitation Toolkit
 
 Usage:
-    python -m mwaa_security_tool <command> [options]
+    celerystrike <command> [options]
 
 Commands:
     deploy      - Deploy C2 infrastructure, generate DAG, upload to S3
@@ -24,8 +24,8 @@ from .utils import setup_logging, print_banner, print_section, print_success, pr
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mwaa-security-tool",
-        description="MWAA SQS Execution Role Security Testing Tool v2.0",
+        prog="celerystrike",
+        description="CeleryStrike — AWS MWAA Execution Role Exploitation Toolkit",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
