@@ -56,8 +56,8 @@ See [aws-mwaa-post-exploitation.md](aws-mwaa-post-exploitation.md) for the full 
 ## Installation
 
 ```bash
-git clone https://github.com/AI-redteam/AWS-MWAA-SQS-Execution-Role-Research.git
-cd AWS-MWAA-SQS-Execution-Role-Research
+git clone https://github.com/AI-redteam/celerystrike.git
+cd CeleryStrike
 
 pip install -e .
 ```
