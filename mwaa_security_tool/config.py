@@ -45,7 +45,7 @@ RECON_ENVIRONMENTS = [
 
 BANNER = r"""
 ╔══════════════════════════════════════════════════════════════╗
-║         MWAA SQS Security Tool v2.0                         ║
+║         MWAA SQS Security Tool v2.0                          ║
 ║                                                              ║
 ║  AWS MWAA Default IAM Policy Exploitation Toolkit            ║
 ║  For authorized security testing and research only.          ║
