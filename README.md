@@ -2,9 +2,14 @@
 
 **AWS MWAA Execution Role Exploitation Toolkit**
 
-<p align="center">
-<img src="https://github.com/user-attachments/assets/1f615e51-37ea-4303-8779-6dbd9e09f68d" alt="CeleryStrike" width="600"/>
-</p>
+```
+ ______     ______     __         ______     ______     __  __        ______     ______   ______     __     __  __     ______    
+/\  ___\   /\  ___\   /\ \       /\  ___\   /\  == \   /\ \_\ \      /\  ___\   /\__  _\ /\  == \   /\ \   /\ \/ /    /\  ___\   
+\ \ \____  \ \  __\   \ \ \____  \ \  __\   \ \  __<   \ \____ \     \ \___  \  \/_/\ \/ \ \  __<   \ \ \  \ \  _"-.  \ \  __\   
+ \ \_____\  \ \_____\  \ \_____\  \ \_____\  \ \_\ \_\  \/\_____\     \/\_____\    \ \_\  \ \_\ \_\  \ \_\  \ \_\ \_\  \ \_____\ 
+  \/_____/   \/_____/   \/_____/   \/_____/   \/_/ /_/   \/_____/      \/_____/     \/_/   \/_/ /_/   \/_/   \/_/\/_/   \/_____/ 
+                                                                                                                                 
+```
 
 CeleryStrike weaponizes the default AWS MWAA execution role's wildcard SQS policy (`arn:aws:sqs:*:*:airflow-celery-*`) to establish full command-and-control over Airflow workers. A single DAG upload gives you an interactive C2 implant with built-in credential harvesting, cross-account recon, event injection, and more — all tunneled through SQS queues that blend in with legitimate Celery traffic.
 
