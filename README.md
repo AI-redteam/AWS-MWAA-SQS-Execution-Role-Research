@@ -11,7 +11,7 @@
                                                                                                                                  
 ```
 
-CeleryStrike weaponizes the default AWS MWAA execution role's wildcard SQS policy (`arn:aws:sqs:*:*:airflow-celery-*`) to establish full command-and-control over Airflow workers. A single DAG upload gives you an interactive C2 implant with built-in credential harvesting, cross-account recon, event injection, and more — all tunneled through SQS queues that blend in with legitimate Celery traffic.
+CeleryStrike weaponizes the REQUIRED default AWS MWAA execution role's wildcard SQS policy (`arn:aws:sqs:*:*:airflow-celery-*`) to establish full command-and-control over Airflow workers. A single DAG upload gives you an interactive C2 implant with built-in credential harvesting, cross-account recon, event injection, and more — all tunneled through SQS queues that blend in with legitimate Celery traffic.
 
 > **For authorized security testing, penetration testing engagements, and defensive validation only.**
 
